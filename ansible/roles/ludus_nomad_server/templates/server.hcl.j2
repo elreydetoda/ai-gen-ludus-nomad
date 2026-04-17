@@ -1,0 +1,43 @@
+datacenter = "{{ nomad_datacenter }}"
+region     = "{{ nomad_region }}"
+data_dir   = "{{ nomad_data_dir }}"
+bind_addr  = "0.0.0.0"
+
+advertise {
+  http = "{{ ansible_host | default(ansible_default_ipv4.address) }}:4646"
+  rpc  = "{{ ansible_host | default(ansible_default_ipv4.address) }}:4647"
+  serf = "{{ ansible_host | default(ansible_default_ipv4.address) }}:4648"
+}
+
+server {
+  enabled          = true
+  bootstrap_expect = {{ groups["nomad_servers"] | length }}
+  encrypt          = "{{ hostvars['localhost'].nomad_gossip_key }}"
+
+  server_join {
+    retry_join = [{% for host in groups["nomad_servers"] %}"{{ hostvars[host].ansible_host | default(hostvars[host].ansible_default_ipv4.address) }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+    retry_max = 0
+  }
+}
+
+acl {
+  enabled                  = true
+  default_policy           = "deny"
+  enable_token_persistence = true
+}
+
+tls {
+  http                   = true
+  rpc                    = true
+  verify_server_hostname = true
+  verify_https_client    = true
+  ca_file                = "{{ nomad_tls_dir }}/nomad-ca.pem"
+  cert_file              = "{{ nomad_tls_dir }}/nomad-agent.pem"
+  key_file               = "{{ nomad_tls_dir }}/nomad-agent-key.pem"
+}
+
+telemetry {
+  publish_allocation_metrics = true
+  publish_node_metrics       = true
+  prometheus_metrics         = true
+}

@@ -1,0 +1,43 @@
+job "{{ nomad_demo_job_name }}" {
+  region      = "{{ nomad_region }}"
+  datacenters = ["{{ nomad_datacenter }}"]
+  type        = "service"
+
+  group "web" {
+    count = 1
+
+    network {
+      port "http" {
+        to = {{ nomad_demo_port }}
+      }
+    }
+
+    service {
+      name     = "{{ nomad_demo_job_name }}"
+      provider = "nomad"
+      port     = "http"
+
+      check {
+        type     = "http"
+        path     = "/"
+        interval = "10s"
+        timeout  = "2s"
+      }
+    }
+
+    task "http-echo" {
+      driver = "docker"
+
+      config {
+        image = "hashicorp/http-echo:1.0"
+        ports = ["http"]
+        args  = ["-listen", ":{{ nomad_demo_port }}", "-text", "{{ nomad_demo_message }}"]
+      }
+
+      resources {
+        cpu    = 100
+        memory = 128
+      }
+    }
+  }
+}

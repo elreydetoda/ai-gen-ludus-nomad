@@ -1,0 +1,134 @@
+- name: Install shared server certificate
+  ansible.builtin.copy:
+    src: "{{ nomad_local_artifacts_dir }}/nomad-server.pem"
+    dest: "{{ nomad_tls_dir }}/nomad-agent.pem"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0644"
+  notify: restart nomad
+
+- name: Install shared server key
+  ansible.builtin.copy:
+    src: "{{ nomad_local_artifacts_dir }}/nomad-server-key.pem"
+    dest: "{{ nomad_tls_dir }}/nomad-agent-key.pem"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0640"
+  notify: restart nomad
+
+- name: Render Nomad server configuration
+  ansible.builtin.template:
+    src: server.hcl.j2
+    dest: "{{ nomad_config_dir }}/nomad.hcl"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: restart nomad
+
+- name: Ensure Nomad server service is enabled
+  ansible.builtin.systemd:
+    name: nomad
+    enabled: true
+    state: started
+
+- name: Wait for the Nomad server API to answer locally
+  ansible.builtin.uri:
+    url: https://127.0.0.1:4646/v1/status/leader
+    validate_certs: false
+    method: GET
+  register: nomad_server_api_status
+  retries: 20
+  delay: 10
+  until: nomad_server_api_status.status == 200
+
+- name: Wait for cluster quorum from the bootstrap server
+  ansible.builtin.command: nomad server members
+  environment:
+    NOMAD_ADDR: https://127.0.0.1:4646
+    NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+    NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+    NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+    NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+  register: nomad_server_members
+  retries: "{{ nomad_bootstrap_wait_retries }}"
+  delay: "{{ nomad_bootstrap_wait_delay }}"
+  until: nomad_server_members.rc == 0 and (nomad_server_members.stdout_lines | select('search', 'alive') | list | length) >= 3
+  when: inventory_hostname == groups["nomad_servers"][0]
+
+- name: Bootstrap ACL system
+  ansible.builtin.command: nomad acl bootstrap -json
+  environment:
+    NOMAD_ADDR: https://127.0.0.1:4646
+    NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+    NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+    NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+    NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+  register: nomad_acl_bootstrap
+  when: inventory_hostname == groups["nomad_servers"][0]
+  args:
+    creates: "{{ nomad_config_dir }}/bootstrap.token"
+
+- name: Persist ACL bootstrap token
+  ansible.builtin.copy:
+    content: "{{ (nomad_acl_bootstrap.stdout | from_json).SecretID }}\n"
+    dest: "{{ nomad_config_dir }}/bootstrap.token"
+    owner: root
+    group: "{{ nomad_group }}"
+    mode: "0640"
+  when:
+    - inventory_hostname == groups["nomad_servers"][0]
+    - nomad_acl_bootstrap is changed
+
+- name: Read persisted ACL bootstrap token
+  ansible.builtin.slurp:
+    src: "{{ nomad_config_dir }}/bootstrap.token"
+  register: nomad_bootstrap_token_file
+  when: inventory_hostname == groups["nomad_servers"][0]
+
+- name: Publish ACL bootstrap token as a fact
+  ansible.builtin.set_fact:
+    nomad_bootstrap_token: "{{ nomad_bootstrap_token_file.content | b64decode | trim }}"
+  when: inventory_hostname == groups["nomad_servers"][0]
+
+- name: Render demo Nomad job file
+  ansible.builtin.template:
+    src: hello-world.nomad.hcl.j2
+    dest: "{{ nomad_config_dir }}/{{ nomad_demo_job_name }}.nomad"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - inventory_hostname == groups["nomad_servers"][0]
+    - nomad_deploy_demo_job | bool
+
+- name: Wait for at least one Nomad client before demo submission
+  ansible.builtin.command: nomad node status
+  environment:
+    NOMAD_ADDR: https://127.0.0.1:4646
+    NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+    NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+    NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+    NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+    NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+  register: nomad_client_status
+  retries: 20
+  delay: 10
+  until: nomad_client_status.rc == 0 and ('ready' in nomad_client_status.stdout or 'eligible' in nomad_client_status.stdout)
+  when:
+    - inventory_hostname == groups["nomad_servers"][0]
+    - nomad_deploy_demo_job | bool
+
+- name: Submit demo Nomad job
+  ansible.builtin.command: nomad job run {{ nomad_config_dir }}/{{ nomad_demo_job_name }}.nomad
+  environment:
+    NOMAD_ADDR: https://127.0.0.1:4646
+    NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+    NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+    NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+    NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+    NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+  register: nomad_demo_job_run
+  changed_when: "'Evaluation ID' in nomad_demo_job_run.stdout"
+  when:
+    - inventory_hostname == groups["nomad_servers"][0]
+    - nomad_deploy_demo_job | bool

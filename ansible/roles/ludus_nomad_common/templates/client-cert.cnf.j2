@@ -1,0 +1,17 @@
+[ req ]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+[ req_distinguished_name ]
+CN = {{ nomad_client_cert_name }}
+[ v3_req ]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+[ alt_names ]
+DNS.1 = {{ nomad_client_cert_name }}
+DNS.2 = localhost
+{% for host in groups["nomad_clients"] %}
+IP.{{ loop.index }} = {{ hostvars[host].ansible_host | default(hostvars[host].ansible_default_ipv4.address) }}
+{% endfor %}
+IP.{{ groups["nomad_clients"] | length + 1 }} = 127.0.0.1

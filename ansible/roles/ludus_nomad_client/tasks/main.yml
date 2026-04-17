@@ -1,0 +1,32 @@
+- name: Install shared client certificate
+  ansible.builtin.copy:
+    src: "{{ nomad_local_artifacts_dir }}/nomad-client.pem"
+    dest: "{{ nomad_tls_dir }}/nomad-agent.pem"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0644"
+  notify: restart nomad
+
+- name: Install shared client key
+  ansible.builtin.copy:
+    src: "{{ nomad_local_artifacts_dir }}/nomad-client-key.pem"
+    dest: "{{ nomad_tls_dir }}/nomad-agent-key.pem"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0640"
+  notify: restart nomad
+
+- name: Render Nomad client configuration
+  ansible.builtin.template:
+    src: client.hcl.j2
+    dest: "{{ nomad_config_dir }}/nomad.hcl"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: restart nomad
+
+- name: Ensure Nomad client service is enabled
+  ansible.builtin.systemd:
+    name: nomad
+    enabled: true
+    state: started

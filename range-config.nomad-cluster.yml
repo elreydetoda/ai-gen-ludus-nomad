@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
+ludus:
+  - vm_name: "{{ range_id }}-nomad-srv1"
+    hostname: "{{ range_id }}-nomad-srv1"
+    template: debian-12-x64-server-template
+    vlan: 50
+    ip_last_octet: 11
+    ram_gb: 4
+    cpus: 2
+    linux:
+      packages:
+        - curl
+        - gpg
+        - jq
+        - unzip
+    roles:
+      - ludus_nomad_common
+      - ludus_nomad_server
+    ansible_groups:
+      - nomad_cluster
+      - nomad_servers
+      - nomad_bootstrap
+
+  - vm_name: "{{ range_id }}-nomad-srv2"
+    hostname: "{{ range_id }}-nomad-srv2"
+    template: debian-12-x64-server-template
+    vlan: 50
+    ip_last_octet: 12
+    ram_gb: 4
+    cpus: 2
+    linux:
+      packages:
+        - curl
+        - gpg
+        - jq
+        - unzip
+    roles:
+      - ludus_nomad_common
+      - ludus_nomad_server
+    ansible_groups:
+      - nomad_cluster
+      - nomad_servers
+
+  - vm_name: "{{ range_id }}-nomad-srv3"
+    hostname: "{{ range_id }}-nomad-srv3"
+    template: debian-12-x64-server-template
+    vlan: 50
+    ip_last_octet: 13
+    ram_gb: 4
+    cpus: 2
+    linux:
+      packages:
+        - curl
+        - gpg
+        - jq
+        - unzip
+    roles:
+      - ludus_nomad_common
+      - ludus_nomad_server
+    ansible_groups:
+      - nomad_cluster
+      - nomad_servers
+
+  - vm_name: "{{ range_id }}-nomad-client1"
+    hostname: "{{ range_id }}-nomad-client1"
+    template: debian-12-x64-server-template
+    vlan: 50
+    ip_last_octet: 21
+    ram_gb: 4
+    cpus: 2
+    linux:
+      packages:
+        - curl
+        - gpg
+        - jq
+        - unzip
+    roles:
+      - ludus_nomad_common
+      - ludus_nomad_client
+    ansible_groups:
+      - nomad_cluster
+      - nomad_clients
+
+global_role_vars:
+  nomad_datacenter: dc1
+  nomad_region: global
+  nomad_version: "1.9.6-1"
+  nomad_deploy_demo_job: false
+  nomad_demo_job_name: hello-world
+  nomad_demo_message: hello from nomad
+  nomad_demo_port: 8000
+
+network:
+  inter_vlan_default: REJECT
+  external_default: ACCEPT
+  always_blocked_networks:
+    - 10.42.0.0/16
+
+defaults:
+  snapshot_with_RAM: true
+  stale_hours: 0
+  ad_domain_functional_level: Win2012R2
+  ad_forest_functional_level: Win2012R2
+  ad_domain_admin: domainadmin
+  ad_domain_admin_password: password
+  ad_domain_user: domainuser
+  ad_domain_user_password: password
+  ad_domain_safe_mode_password: password
+  timezone: America/New_York
+  enable_dynamic_wallpaper: true

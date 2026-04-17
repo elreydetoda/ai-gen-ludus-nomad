@@ -1,0 +1,273 @@
+- name: Validate Nomad inventory groups
+  ansible.builtin.assert:
+    that:
+      - groups["nomad_servers"] is defined
+      - groups["nomad_clients"] is defined
+      - groups["nomad_servers"] | length == 3
+      - groups["nomad_clients"] | length >= 1
+    fail_msg: Expected 3 hosts in nomad_servers and at least 1 host in nomad_clients.
+
+- name: Install apt prerequisites
+  ansible.builtin.apt:
+    name: "{{ nomad_apt_dependencies }}"
+    state: present
+    update_cache: true
+
+- name: Install HashiCorp apt signing key
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  args:
+    creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    executable: /bin/bash
+
+- name: Configure HashiCorp apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/hashicorp.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main
+
+- name: Install Nomad and runtime packages
+  ansible.builtin.apt:
+    name: "{{ ['nomad=' ~ nomad_version] + nomad_runtime_packages }}"
+    state: present
+    update_cache: true
+
+- name: Hold Nomad package at the configured version
+  ansible.builtin.dpkg_selections:
+    name: nomad
+    selection: hold
+
+- name: Add nomad user to docker group
+  ansible.builtin.user:
+    name: "{{ nomad_user }}"
+    groups: docker
+    append: true
+
+- name: Ensure docker service is enabled
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Create Nomad directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(nomad_user) }}"
+    group: "{{ item.group | default(nomad_group) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ nomad_data_dir }}", mode: "0750" }
+    - { path: "{{ nomad_config_dir }}", mode: "0750" }
+    - { path: "{{ nomad_tls_dir }}", mode: "0750" }
+    - { path: "/etc/systemd/system/nomad.service.d", owner: "root", group: "root", mode: "0755" }
+
+- name: Create local PKI workspace on the controller
+  ansible.builtin.file:
+    path: "{{ nomad_local_artifacts_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate shared gossip encryption key
+  ansible.builtin.shell: |
+    set -euo pipefail
+    openssl rand -base64 32 > "{{ nomad_gossip_key_file }}"
+  args:
+    creates: "{{ nomad_gossip_key_file }}"
+    executable: /bin/bash
+  delegate_to: localhost
+  run_once: true
+
+- name: Read shared gossip encryption key
+  ansible.builtin.slurp:
+    src: "{{ nomad_gossip_key_file }}"
+  register: nomad_gossip_key_slurp
+  delegate_to: localhost
+  run_once: true
+
+- name: Publish shared gossip key as a controller fact
+  ansible.builtin.set_fact:
+    nomad_gossip_key: "{{ nomad_gossip_key_slurp.content | b64decode | trim }}"
+  delegate_to: localhost
+  delegate_facts: true
+  run_once: true
+
+- name: Render server certificate OpenSSL config
+  ansible.builtin.template:
+    src: server-cert.cnf.j2
+    dest: "{{ nomad_local_artifacts_dir }}/server-cert.cnf"
+    mode: "0600"
+  delegate_to: localhost
+  run_once: true
+
+- name: Render client certificate OpenSSL config
+  ansible.builtin.template:
+    src: client-cert.cnf.j2
+    dest: "{{ nomad_local_artifacts_dir }}/client-cert.cnf"
+    mode: "0600"
+  delegate_to: localhost
+  run_once: true
+
+- name: Render CLI certificate OpenSSL config
+  ansible.builtin.template:
+    src: cli-cert.cnf.j2
+    dest: "{{ nomad_local_artifacts_dir }}/cli-cert.cnf"
+    mode: "0600"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate Nomad CA private key
+  ansible.builtin.command:
+    cmd: openssl genrsa -out {{ nomad_local_artifacts_dir }}/nomad-ca-key.pem 4096
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-ca-key.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate Nomad CA certificate
+  ansible.builtin.command:
+    cmd: openssl req -x509 -new -nodes -key {{ nomad_local_artifacts_dir }}/nomad-ca-key.pem -sha256 -days 3650 -out {{ nomad_local_artifacts_dir }}/nomad-ca.pem -subj /CN=nomad-ca
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-ca.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate server certificate private key
+  ansible.builtin.command:
+    cmd: openssl genrsa -out {{ nomad_local_artifacts_dir }}/nomad-server-key.pem 4096
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-server-key.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate server certificate request
+  ansible.builtin.command:
+    cmd: openssl req -new -key {{ nomad_local_artifacts_dir }}/nomad-server-key.pem -out {{ nomad_local_artifacts_dir }}/nomad-server.csr -config {{ nomad_local_artifacts_dir }}/server-cert.cnf
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-server.csr"
+  delegate_to: localhost
+  run_once: true
+
+- name: Sign shared server certificate
+  ansible.builtin.command:
+    cmd: openssl x509 -req -in {{ nomad_local_artifacts_dir }}/nomad-server.csr -CA {{ nomad_local_artifacts_dir }}/nomad-ca.pem -CAkey {{ nomad_local_artifacts_dir }}/nomad-ca-key.pem -CAcreateserial -out {{ nomad_local_artifacts_dir }}/nomad-server.pem -days 3650 -sha256 -extensions v3_req -extfile {{ nomad_local_artifacts_dir }}/server-cert.cnf
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-server.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate client certificate private key
+  ansible.builtin.command:
+    cmd: openssl genrsa -out {{ nomad_local_artifacts_dir }}/nomad-client-key.pem 4096
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-client-key.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate client certificate request
+  ansible.builtin.command:
+    cmd: openssl req -new -key {{ nomad_local_artifacts_dir }}/nomad-client-key.pem -out {{ nomad_local_artifacts_dir }}/nomad-client.csr -config {{ nomad_local_artifacts_dir }}/client-cert.cnf
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-client.csr"
+  delegate_to: localhost
+  run_once: true
+
+- name: Sign shared client certificate
+  ansible.builtin.command:
+    cmd: openssl x509 -req -in {{ nomad_local_artifacts_dir }}/nomad-client.csr -CA {{ nomad_local_artifacts_dir }}/nomad-ca.pem -CAkey {{ nomad_local_artifacts_dir }}/nomad-ca-key.pem -CAcreateserial -out {{ nomad_local_artifacts_dir }}/nomad-client.pem -days 3650 -sha256 -extensions v3_req -extfile {{ nomad_local_artifacts_dir }}/client-cert.cnf
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-client.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate CLI certificate private key
+  ansible.builtin.command:
+    cmd: openssl genrsa -out {{ nomad_local_artifacts_dir }}/nomad-cli-key.pem 4096
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-cli-key.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Generate CLI certificate request
+  ansible.builtin.command:
+    cmd: openssl req -new -key {{ nomad_local_artifacts_dir }}/nomad-cli-key.pem -out {{ nomad_local_artifacts_dir }}/nomad-cli.csr -config {{ nomad_local_artifacts_dir }}/cli-cert.cnf
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-cli.csr"
+  delegate_to: localhost
+  run_once: true
+
+- name: Sign CLI certificate
+  ansible.builtin.command:
+    cmd: openssl x509 -req -in {{ nomad_local_artifacts_dir }}/nomad-cli.csr -CA {{ nomad_local_artifacts_dir }}/nomad-ca.pem -CAkey {{ nomad_local_artifacts_dir }}/nomad-ca-key.pem -CAcreateserial -out {{ nomad_local_artifacts_dir }}/nomad-cli.pem -days 3650 -sha256 -extensions v3_req -extfile {{ nomad_local_artifacts_dir }}/cli-cert.cnf
+  args:
+    creates: "{{ nomad_local_artifacts_dir }}/nomad-cli.pem"
+  delegate_to: localhost
+  run_once: true
+
+- name: Install shared CA certificate
+  ansible.builtin.copy:
+    src: "{{ nomad_local_artifacts_dir }}/nomad-ca.pem"
+    dest: "{{ nomad_tls_dir }}/nomad-ca.pem"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0644"
+
+- name: Install shared gossip key
+  ansible.builtin.copy:
+    content: "{{ hostvars['localhost'].nomad_gossip_key }}\n"
+    dest: "{{ nomad_tls_dir }}/gossip.key"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0640"
+
+- name: Install CLI certificate
+  ansible.builtin.copy:
+    src: "{{ nomad_local_artifacts_dir }}/nomad-cli.pem"
+    dest: "{{ nomad_tls_dir }}/nomad-cli.pem"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0644"
+
+- name: Install CLI key
+  ansible.builtin.copy:
+    src: "{{ nomad_local_artifacts_dir }}/nomad-cli-key.pem"
+    dest: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0640"
+
+- name: Install Nomad service hardening override
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nomad.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      LimitNOFILE=65536
+      LimitNPROC=infinity
+      TasksMax=infinity
+      CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_BIND_SERVICE
+      AmbientCapabilities=CAP_IPC_LOCK CAP_NET_BIND_SERVICE
+  notify: restart nomad
+
+- name: Install Nomad CLI environment profile
+  ansible.builtin.copy:
+    dest: "{{ nomad_cli_env_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      export NOMAD_ADDR=https://127.0.0.1:4646
+      export NOMAD_CACERT={{ nomad_tls_dir }}/nomad-ca.pem
+      export NOMAD_CLIENT_CERT={{ nomad_tls_dir }}/nomad-cli.pem
+      export NOMAD_CLIENT_KEY={{ nomad_tls_dir }}/nomad-cli-key.pem
+      export NOMAD_TLS_SERVER_NAME={{ nomad_server_cert_name }}
+
+- name: Reload systemd after Nomad service override changes
+  ansible.builtin.systemd_service:
+    daemon_reload: true
