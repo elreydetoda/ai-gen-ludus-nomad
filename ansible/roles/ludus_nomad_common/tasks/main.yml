@@ -251,9 +251,6 @@
       LimitNOFILE=65536
       LimitNPROC=infinity
       TasksMax=infinity
-      CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_BIND_SERVICE
-      AmbientCapabilities=CAP_IPC_LOCK CAP_NET_BIND_SERVICE
-  notify: restart nomad
 
 - name: Install Nomad CLI environment profile
   ansible.builtin.copy:

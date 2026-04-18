@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ludus UV Cache"
+  short_description: "Use a repo-local uv cache in this repo before uv run commands"
+  default_prompt: "Use this skill when running uv commands in this Ludus repo or polling the Ludus API through local Python scripts so UV_CACHE_DIR points to the repo-local .uv-cache directory."

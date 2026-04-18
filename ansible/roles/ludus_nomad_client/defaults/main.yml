@@ -1,0 +1,18 @@
+nomad_datacenter: dc1
+nomad_region: global
+nomad_version: "1.9.6-1"
+nomad_user: nomad
+nomad_group: nomad
+nomad_data_dir: /opt/nomad
+nomad_config_dir: /etc/nomad.d
+nomad_tls_dir: /etc/nomad.d/tls
+nomad_cli_env_path: /etc/profile.d/nomad.sh
+nomad_local_artifacts_dir: /tmp/ludus-nomad-pki
+nomad_gossip_key_file: "{{ nomad_local_artifacts_dir }}/gossip.key"
+nomad_server_cert_name: server.global.nomad
+nomad_client_cert_name: client.global.nomad
+nomad_cli_cert_name: cli.global.nomad
+nomad_deploy_demo_job: false
+nomad_demo_job_name: hello-world
+nomad_demo_message: hello from nomad
+nomad_demo_port: 8000

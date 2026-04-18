@@ -24,8 +24,7 @@ The cluster is configured with the main control-plane protections you would expe
 - TLS enabled for HTTP and RPC
 - mutual TLS between agents
 - hostname verification enabled for servers
-- ACLs enabled with default deny
-- token persistence enabled
+- ACLs enabled
 - Serf gossip encryption enabled
 - package installation from signed repositories
 - Nomad service hardening via a systemd override
