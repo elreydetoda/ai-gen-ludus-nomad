@@ -85,7 +85,7 @@ global_role_vars:
   nomad_datacenter: dc1
   nomad_region: global
   nomad_version: "1.9.6-1"
-  nomad_deploy_demo_job: false
+  nomad_deploy_demo_job: true
   nomad_demo_job_name: hello-world
   nomad_demo_message: hello from nomad
   nomad_demo_port: 8000

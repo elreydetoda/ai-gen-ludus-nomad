@@ -93,6 +93,12 @@
           {{ nomad_journalctl_status.stdout | default('') }}
           {{ nomad_journalctl_status.stderr | default('') }}
 
+- name: Check for a persisted ACL bootstrap token
+  ansible.builtin.stat:
+    path: "{{ nomad_config_dir }}/bootstrap.token"
+  register: nomad_bootstrap_token_stat
+  when: inventory_hostname in groups["nomad_bootstrap"]
+
 - name: Bootstrap ACL system
   ansible.builtin.command: nomad acl bootstrap -json
   environment:
@@ -108,19 +114,42 @@
   failed_when: false
   changed_when: nomad_acl_bootstrap.rc == 0
   when: inventory_hostname in groups["nomad_bootstrap"]
-  args:
-    creates: "{{ nomad_config_dir }}/bootstrap.token"
+    and not (nomad_bootstrap_token_stat.stat.exists | default(false))
 
 - name: Persist ACL bootstrap token
+  vars:
+    nomad_acl_bootstrap_combined_output: "{{ ((nomad_acl_bootstrap.stdout | default('')) ~ '\n' ~ (nomad_acl_bootstrap.stderr | default(''))) | trim }}"
+    nomad_acl_bootstrap_secret_id: "{{ nomad_acl_bootstrap_combined_output | regex_search('\"SecretID\"\\s*:\\s*\"([^\"]+)\"', '\\1') | default('', true) }}"
   ansible.builtin.copy:
-    content: "{{ (nomad_acl_bootstrap.stdout | from_json).SecretID }}\n"
+    content: "{{ nomad_acl_bootstrap_secret_id }}\n"
     dest: "{{ nomad_config_dir }}/bootstrap.token"
     owner: root
     group: "{{ nomad_group }}"
     mode: "0640"
   when:
     - inventory_hostname in groups["nomad_bootstrap"]
-    - nomad_acl_bootstrap is changed
+    - not (nomad_bootstrap_token_stat.stat.exists | default(false))
+    - nomad_acl_bootstrap.rc == 0
+    - nomad_acl_bootstrap_secret_id | length > 0
+
+- name: Fail if ACL bootstrap output did not include a SecretID
+  vars:
+    nomad_acl_bootstrap_combined_output: "{{ ((nomad_acl_bootstrap.stdout | default('')) ~ '\n' ~ (nomad_acl_bootstrap.stderr | default(''))) | trim }}"
+    nomad_acl_bootstrap_secret_id: "{{ nomad_acl_bootstrap_combined_output | regex_search('\"SecretID\"\\s*:\\s*\"([^\"]+)\"', '\\1') | default('', true) }}"
+  ansible.builtin.fail:
+    msg: |
+      Nomad ACL bootstrap succeeded but no SecretID was found in the command output.
+
+      stdout:
+      {{ nomad_acl_bootstrap.stdout | default('') }}
+
+      stderr:
+      {{ nomad_acl_bootstrap.stderr | default('') }}
+  when:
+    - inventory_hostname in groups["nomad_bootstrap"]
+    - not (nomad_bootstrap_token_stat.stat.exists | default(false))
+    - nomad_acl_bootstrap.rc == 0
+    - nomad_acl_bootstrap_secret_id | length == 0
 
 - name: Read persisted ACL bootstrap token
   ansible.builtin.slurp:

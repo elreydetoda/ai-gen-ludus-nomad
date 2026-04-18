@@ -41,16 +41,20 @@ uv run -- python scripts/apply_ludus_nomad_lab.py --deploy --status
 Poll the Ludus API directly through inline Python:
 
 ```powershell
-$env:UV_CACHE_DIR='C:\Users\arod741\src\work\labs\ludus\.uv-cache'
-@'
-import ssl, urllib.request, json
-ctx = ssl._create_unverified_context()
-key = '<current-key>'
-for path in ['https://127.0.0.1:8080/range', 'https://127.0.0.1:8080/range/logs']:
-    req = urllib.request.Request(path, headers={'X-API-Key': key})
-    with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
-        print(r.read().decode('utf-8', errors='replace'))
-'@ | uv run -- python -
+Start-Sleep -Seconds 210; $env:UV_CACHE_DIR = Join-Path $PWD.Path '.uv-cache'; $env:PYTHONIOENCODING='utf-8'; @'
+    import ssl, urllib.request, json, sys
+    ctx = ssl._create_unverified_context()
+    key = '<current-key>'
+    for path in ['https://127.0.0.1:8080/range', 'https://127.0.0.1:8080/range/logs']:
+        req = urllib.request.Request(path, headers={'X-API-Key': key})
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
+            if path.endswith('/range/logs'):
+                obj = json.loads(r.read().decode('utf-8', errors='replace'))
+                text = 'URL %s CURSOR %s\n%s\n---\n' % (path, obj['cursor'], obj['result'][-28000:])
+            else:
+                text = 'URL %s\n%s\n---\n' % (path, r.read().decode('utf-8', errors='replace'))
+            sys.stdout.buffer.write(text.encode('utf-8', errors='replace'))
+    '@ | uv run -- python -
 ```
 
 ## Notes
