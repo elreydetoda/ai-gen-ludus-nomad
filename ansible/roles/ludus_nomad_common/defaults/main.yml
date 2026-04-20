@@ -22,6 +22,7 @@ nomad_apt_dependencies:
   - software-properties-common
   - unzip
 nomad_runtime_packages:
+  - apparmor
   - docker.io
   - openssl
 nomad_bootstrap_wait_retries: 20

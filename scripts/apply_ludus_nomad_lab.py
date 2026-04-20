@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import ssl
 import tarfile
 import uuid
@@ -75,7 +76,12 @@ def upload_role(server: str, api_key: str, role_name: str) -> None:
 
 def render_config(enable_demo_job: bool) -> bytes:
     text = CONFIG_PATH.read_text(encoding="utf-8")
-    text = text.replace("nomad_deploy_demo_job: false", f"nomad_deploy_demo_job: {'true' if enable_demo_job else 'false'}", 1)
+    text = re.sub(
+        r"(?m)^(\s*nomad_deploy_demo_job:\s*)(true|false)\s*$",
+        rf"\1{'true' if enable_demo_job else 'false'}",
+        text,
+        count=1,
+    )
     return text.encode("utf-8")
 
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -24,7 +25,12 @@ def main() -> int:
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     config = SOURCE.read_text(encoding="utf-8")
     demo_enabled = "true" if env_bool("NOMAD_DEPLOY_HELLO_WORLD", False) else "false"
-    config = config.replace("nomad_deploy_demo_job: false", f"nomad_deploy_demo_job: {demo_enabled}", 1)
+    config = re.sub(
+        r"(?m)^(\s*nomad_deploy_demo_job:\s*)(true|false)\s*$",
+        rf"\1{demo_enabled}",
+        config,
+        count=1,
+    )
     OUTPUT.write_text(config, encoding="utf-8")
     print(f"Rendered {OUTPUT}")
     print(f"NOMAD_DEPLOY_HELLO_WORLD={demo_enabled}")

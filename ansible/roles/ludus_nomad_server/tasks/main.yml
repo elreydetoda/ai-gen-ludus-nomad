@@ -173,6 +173,22 @@
     - inventory_hostname in groups["nomad_bootstrap"]
     - nomad_deploy_demo_job | bool
 
+- name: Remove any existing demo Nomad job before resubmission
+  ansible.builtin.command: nomad job stop -purge {{ nomad_demo_job_name }}
+  environment:
+    NOMAD_ADDR: https://127.0.0.1:4646
+    NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+    NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+    NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+    NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+    NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+  register: nomad_demo_job_stop
+  changed_when: nomad_demo_job_stop.rc == 0
+  failed_when: false
+  when:
+    - inventory_hostname in groups["nomad_bootstrap"]
+    - nomad_deploy_demo_job | bool
+
 - name: Wait for at least one Nomad client before demo submission
   ansible.builtin.command: nomad node status
   environment:
@@ -191,7 +207,7 @@
     - nomad_deploy_demo_job | bool
 
 - name: Submit demo Nomad job
-  ansible.builtin.command: nomad job run {{ nomad_config_dir }}/{{ nomad_demo_job_name }}.nomad
+  ansible.builtin.command: nomad job run -detach {{ nomad_config_dir }}/{{ nomad_demo_job_name }}.nomad
   environment:
     NOMAD_ADDR: https://127.0.0.1:4646
     NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
@@ -201,6 +217,117 @@
     NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
   register: nomad_demo_job_run
   changed_when: "'Evaluation ID' in nomad_demo_job_run.stdout"
+  when:
+    - inventory_hostname in groups["nomad_bootstrap"]
+    - nomad_deploy_demo_job | bool
+
+- name: Wait for the demo Nomad allocation to reach running state
+  block:
+    - name: Poll demo Nomad allocations for a running client status
+      ansible.builtin.command: nomad job allocs -json {{ nomad_demo_job_name }}
+      environment:
+        NOMAD_ADDR: https://127.0.0.1:4646
+        NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+        NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+        NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+        NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+        NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+      register: nomad_demo_job_allocs
+      retries: 30
+      delay: 10
+      until:
+        - nomad_demo_job_allocs.rc == 0
+        - "'\"ClientStatus\":\"running\"' in (nomad_demo_job_allocs.stdout | replace(' ', ''))"
+      changed_when: false
+  rescue:
+    - name: Capture demo job status after failed allocation health
+      ansible.builtin.command: nomad job status {{ nomad_demo_job_name }}
+      environment:
+        NOMAD_ADDR: https://127.0.0.1:4646
+        NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+        NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+        NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+        NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+        NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+      register: nomad_demo_job_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture demo job allocations after failed allocation health
+      ansible.builtin.command: nomad job allocs {{ nomad_demo_job_name }}
+      environment:
+        NOMAD_ADDR: https://127.0.0.1:4646
+        NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+        NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+        NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+        NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+        NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+      register: nomad_demo_job_allocs_text
+      changed_when: false
+      failed_when: false
+
+    - name: Capture latest demo allocation status after failed allocation health
+      ansible.builtin.shell: |
+        set -euo pipefail
+        alloc_id="$(nomad job allocs -json {{ nomad_demo_job_name }} | jq -r '.[0].ID // empty')"
+        if [ -z "$alloc_id" ]; then
+          exit 0
+        fi
+        nomad alloc status "$alloc_id"
+      args:
+        executable: /bin/bash
+      environment:
+        NOMAD_ADDR: https://127.0.0.1:4646
+        NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+        NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+        NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+        NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+        NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+      register: nomad_demo_alloc_status
+      changed_when: false
+      failed_when: false
+
+    - name: Capture latest demo allocation logs after failed allocation health
+      ansible.builtin.shell: |
+        set -euo pipefail
+        alloc_id="$(nomad job allocs -json {{ nomad_demo_job_name }} | jq -r '.[0].ID // empty')"
+        if [ -z "$alloc_id" ]; then
+          exit 0
+        fi
+        nomad alloc logs "$alloc_id" http-echo
+      args:
+        executable: /bin/bash
+      environment:
+        NOMAD_ADDR: https://127.0.0.1:4646
+        NOMAD_CACERT: "{{ nomad_tls_dir }}/nomad-ca.pem"
+        NOMAD_CLIENT_CERT: "{{ nomad_tls_dir }}/nomad-cli.pem"
+        NOMAD_CLIENT_KEY: "{{ nomad_tls_dir }}/nomad-cli-key.pem"
+        NOMAD_TLS_SERVER_NAME: "{{ nomad_server_cert_name }}"
+        NOMAD_TOKEN: "{{ nomad_bootstrap_token }}"
+      register: nomad_demo_alloc_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with demo workload diagnostics
+      ansible.builtin.fail:
+        msg: |
+          Demo Nomad workload did not reach a running allocation.
+
+          nomad job status {{ nomad_demo_job_name }}
+          {{ nomad_demo_job_status.stdout | default('') }}
+          {{ nomad_demo_job_status.stderr | default('') }}
+
+          nomad job allocs {{ nomad_demo_job_name }}
+          {{ nomad_demo_job_allocs_text.stdout | default('') }}
+          {{ nomad_demo_job_allocs_text.stderr | default('') }}
+
+          nomad alloc status <latest>
+          {{ nomad_demo_alloc_status.stdout | default('') }}
+          {{ nomad_demo_alloc_status.stderr | default('') }}
+
+          nomad alloc logs <latest> http-echo
+          {{ nomad_demo_alloc_logs.stdout | default('') }}
+          {{ nomad_demo_alloc_logs.stderr | default('') }}
   when:
     - inventory_hostname in groups["nomad_bootstrap"]
     - nomad_deploy_demo_job | bool
